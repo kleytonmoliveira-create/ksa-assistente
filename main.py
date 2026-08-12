@@ -640,31 +640,39 @@ async def receive_webhook(request: Request):
         sender = message["from"]
         message_id = message["id"]
         received_text = message["text"]["body"]
-command_reply = handle_command(
-    sender,
-    received_text
-)
 
-if command_reply:
-    save_message(
-        sender,
-        "user",
-        received_text,
-        message_id
-    )
+        # ---------------------------------
+        # COMANDOS @KSA
+        # ---------------------------------
+        command_reply = handle_command(
+            sender,
+            received_text
+        )
 
-    save_message(
-        sender,
-        "assistant",
-        command_reply
-    )
+        if command_reply:
+            save_message(
+                sender,
+                "user",
+                received_text,
+                message_id
+            )
 
-    send_whatsapp_message(
-        sender,
-        command_reply
-    )
+            save_message(
+                sender,
+                "assistant",
+                command_reply
+            )
 
-    return {"status": "ok"}
+            send_whatsapp_message(
+                sender,
+                command_reply
+            )
+
+            return {"status": "ok"}
+
+        # ---------------------------------
+        # CONTATO
+        # ---------------------------------
         contact_name = None
 
         contacts = value.get("contacts", [])
@@ -676,8 +684,14 @@ if command_reply:
                 .get("name")
             )
 
-        save_contact(sender, contact_name)
+        save_contact(
+            sender,
+            contact_name
+        )
 
+        # ---------------------------------
+        # SALVA A MENSAGEM RECEBIDA
+        # ---------------------------------
         save_message(
             sender,
             "user",
@@ -685,11 +699,18 @@ if command_reply:
             message_id
         )
 
-        project_id = get_active_project_id(sender)
+        # ---------------------------------
+        # PROJETO ATIVO + EXTRAÇÃO
+        # ---------------------------------
+        project_id = get_active_project_id(
+            sender
+        )
 
         if project_id:
-            operational_data = extract_operational_data(
-                received_text
+            operational_data = (
+                extract_operational_data(
+                    received_text
+                )
             )
 
             print(
@@ -707,6 +728,9 @@ if command_reply:
                 operational_data
             )
 
+        # ---------------------------------
+        # RESPOSTA DA IA
+        # ---------------------------------
         ai_reply = ask_openai(sender)
 
         save_message(
