@@ -640,7 +640,31 @@ async def receive_webhook(request: Request):
         sender = message["from"]
         message_id = message["id"]
         received_text = message["text"]["body"]
+command_reply = handle_command(
+    sender,
+    received_text
+)
 
+if command_reply:
+    save_message(
+        sender,
+        "user",
+        received_text,
+        message_id
+    )
+
+    save_message(
+        sender,
+        "assistant",
+        command_reply
+    )
+
+    send_whatsapp_message(
+        sender,
+        command_reply
+    )
+
+    return {"status": "ok"}
         contact_name = None
 
         contacts = value.get("contacts", [])
