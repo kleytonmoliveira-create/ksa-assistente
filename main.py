@@ -326,7 +326,298 @@ def send_whatsapp_message(to: str, text: str):
 
     return response
 
+def normalize_command(text: str):
+    return text.strip()
 
+
+def create_project_from_command(command: str):
+    # Formato:
+    # @KSA criar projeto Skandi Achiever - DOF
+
+    content = command[len("@KSA criar projeto"):].strip()
+
+    if not content:
+        return None, "Informe o nome do projeto."
+
+    client_name = None
+    project_name = content
+
+    if " - " in content:
+        parts = content.split(" - ", 1)
+        project_name = parts[0].strip()
+        client_name = parts[1].strip()
+
+    try:
+        response = (
+            supabase
+            .table("projects")
+            .insert({
+                "name": project_name,
+                "client": client_name,
+                "status": "active"
+            })
+            .execute()
+        )
+
+        project = response.data[0]
+
+        return project, None
+
+    except Exception as e:
+        print("ERRO CRIAR PROJETO:", repr(e))
+
+        return None, (
+            "Não consegui criar o projeto. "
+            "Ele pode já existir."
+        )
+
+
+def find_project_by_name(name: str):
+    response = (
+        supabase
+        .table("projects")
+        .select("*")
+        .ilike("name", f"%{name}%")
+        .eq("status", "active")
+        .limit(5)
+        .execute()
+    )
+
+    return response.data or []
+
+
+def set_active_project(whatsapp_id: str, project_id: int):
+    (
+        supabase
+        .table("contacts")
+        .update({
+            "active_project_id": project_id
+        })
+        .eq("whatsapp_id", whatsapp_id)
+        .execute()
+    )
+
+
+def get_active_project(whatsapp_id: str):
+    response = (
+        supabase
+        .table("contacts")
+        .select(
+            "active_project_id"
+        )
+        .eq("whatsapp_id", whatsapp_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    project_id = response.data[0].get(
+        "active_project_id"
+    )
+
+    if not project_id:
+        return None
+
+    project_response = (
+        supabase
+        .table("projects")
+        .select("*")
+        .eq("id", project_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not project_response.data:
+        return None
+
+    return project_response.data[0]
+
+
+def get_open_pending_items(project_id: int):
+    response = (
+        supabase
+        .table("pending_items")
+        .select(
+            "id,description,responsible,status,created_at"
+        )
+        .eq("project_id", project_id)
+        .eq("status", "open")
+        .order("created_at")
+        .execute()
+    )
+
+    return response.data or []
+
+
+def handle_command(
+    whatsapp_id: str,
+    text: str
+):
+    command = normalize_command(text)
+
+    lower = command.lower()
+
+    # CRIAR PROJETO
+    if lower.startswith("@ksa criar projeto"):
+        project, error = create_project_from_command(
+            command
+        )
+
+        if error:
+            return error
+
+        set_active_project(
+            whatsapp_id,
+            project["id"]
+        )
+
+        reply = (
+            f"Projeto criado e ativado:\n"
+            f"{project['name']}"
+        )
+
+        if project.get("client"):
+            reply += (
+                f"\nCliente: "
+                f"{project['client']}"
+            )
+
+        return reply
+
+    # USAR PROJETO
+    if lower.startswith("@ksa usar projeto"):
+        project_name = command[
+            len("@KSA usar projeto"):
+        ].strip()
+
+        if not project_name:
+            return (
+                "Informe o nome do projeto."
+            )
+
+        projects = find_project_by_name(
+            project_name
+        )
+
+        if not projects:
+            return (
+                "Não encontrei um projeto ativo "
+                f"com '{project_name}'."
+            )
+
+        if len(projects) > 1:
+            names = "\n".join(
+                [
+                    f"- {p['name']}"
+                    for p in projects
+                ]
+            )
+
+            return (
+                "Encontrei mais de um projeto:\n"
+                f"{names}\n\n"
+                "Informe um nome mais específico."
+            )
+
+        project = projects[0]
+
+        set_active_project(
+            whatsapp_id,
+            project["id"]
+        )
+
+        return (
+            "Projeto ativo alterado para:\n"
+            f"{project['name']}"
+        )
+
+    # PROJETO ATIVO
+    if lower in [
+        "@ksa projeto ativo",
+        "@ksa projeto",
+        "@ksa qual projeto está ativo",
+        "@ksa qual projeto esta ativo"
+    ]:
+        project = get_active_project(
+            whatsapp_id
+        )
+
+        if not project:
+            return (
+                "Nenhum projeto está ativo."
+            )
+
+        reply = (
+            f"Projeto ativo:\n"
+            f"{project['name']}"
+        )
+
+        if project.get("vessel"):
+            reply += (
+                f"\nEmbarcação: "
+                f"{project['vessel']}"
+            )
+
+        if project.get("client"):
+            reply += (
+                f"\nCliente: "
+                f"{project['client']}"
+            )
+
+        return reply
+
+    # PENDÊNCIAS
+    if lower in [
+        "@ksa pendências",
+        "@ksa pendencias",
+        "@ksa listar pendências",
+        "@ksa listar pendencias"
+    ]:
+        project = get_active_project(
+            whatsapp_id
+        )
+
+        if not project:
+            return (
+                "Nenhum projeto está ativo."
+            )
+
+        pending = get_open_pending_items(
+            project["id"]
+        )
+
+        if not pending:
+            return (
+                f"Não há pendências abertas em "
+                f"{project['name']}."
+            )
+
+        lines = [
+            f"Pendências — {project['name']}:"
+        ]
+
+        for index, item in enumerate(
+            pending,
+            start=1
+        ):
+            line = (
+                f"{index}. "
+                f"{item['description']}"
+            )
+
+            if item.get("responsible"):
+                line += (
+                    f"\nResponsável: "
+                    f"{item['responsible']}"
+                )
+
+            lines.append(line)
+
+        return "\n\n".join(lines)
+
+    return None
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     payload = await request.json()
