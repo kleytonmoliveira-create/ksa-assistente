@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 
 from fastapi import FastAPI, Request, Response
@@ -37,6 +38,20 @@ Regras:
 - Quando faltar informação importante, pergunte.
 - Não trate uma suspeita como falha confirmada.
 - Considere o histórico da conversa fornecido.
+"""
+
+EXTRACTION_PROMPT = """
+Analise a mensagem como registro operacional de manutenção naval.
+
+Extraia SOMENTE informações explicitamente presentes na mensagem.
+
+Regras importantes:
+- Não invente equipamento, responsável, status ou falha.
+- "Parece", "possivelmente", "aparenta" e similares são hipóteses.
+- Só considere anomalia confirmada quando a mensagem afirmar isso como fato.
+- Uma atividade é um trabalho executado, em execução ou planejado.
+- Uma pendência é uma ação que ainda precisa ser feita.
+- Não transforme conversa genérica ou pergunta técnica em registro operacional.
 """
 
 
@@ -102,10 +117,25 @@ def get_history(whatsapp_id: str, limit: int = 20):
     )
 
     rows = response.data or []
-
     rows.reverse()
 
     return rows
+
+
+def get_active_project_id(whatsapp_id: str):
+    response = (
+        supabase
+        .table("contacts")
+        .select("active_project_id")
+        .eq("whatsapp_id", whatsapp_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    return response.data[0].get("active_project_id")
 
 
 def ask_openai(whatsapp_id: str):
@@ -126,6 +156,139 @@ def ask_openai(whatsapp_id: str):
     )
 
     return response.output_text
+
+
+def extract_operational_data(text: str):
+    response = client.responses.create(
+        model="gpt-5.6",
+        instructions=EXTRACTION_PROMPT,
+        input=text,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "operational_record",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "activity": {
+                            "type": ["object", "null"],
+                            "properties": {
+                                "description": {"type": "string"},
+                                "equipment": {"type": ["string", "null"]},
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "planned",
+                                        "in_progress",
+                                        "completed",
+                                        "unknown"
+                                    ]
+                                }
+                            },
+                            "required": [
+                                "description",
+                                "equipment",
+                                "status"
+                            ],
+                            "additionalProperties": False
+                        },
+
+                        "issue": {
+                            "type": ["object", "null"],
+                            "properties": {
+                                "description": {"type": "string"},
+                                "equipment": {"type": ["string", "null"]},
+                                "certainty": {
+                                    "type": "string",
+                                    "enum": [
+                                        "confirmed",
+                                        "suspected",
+                                        "reported"
+                                    ]
+                                }
+                            },
+                            "required": [
+                                "description",
+                                "equipment",
+                                "certainty"
+                            ],
+                            "additionalProperties": False
+                        },
+
+                        "pending_item": {
+                            "type": ["object", "null"],
+                            "properties": {
+                                "description": {"type": "string"},
+                                "responsible": {
+                                    "type": ["string", "null"]
+                                }
+                            },
+                            "required": [
+                                "description",
+                                "responsible"
+                            ],
+                            "additionalProperties": False
+                        }
+                    },
+
+                    "required": [
+                        "activity",
+                        "issue",
+                        "pending_item"
+                    ],
+
+                    "additionalProperties": False
+                }
+            }
+        }
+    )
+
+    return json.loads(response.output_text)
+
+
+def save_operational_data(
+    project_id: int,
+    whatsapp_id: str,
+    message_id: str,
+    data: dict
+):
+    activity = data.get("activity")
+
+    if activity:
+        supabase.table("activities").insert({
+            "project_id": project_id,
+            "whatsapp_id": whatsapp_id,
+            "description": activity["description"],
+            "equipment": activity.get("equipment"),
+            "status": activity["status"],
+            "source_message_id": message_id
+        }).execute()
+
+    issue = data.get("issue")
+
+    if issue:
+        supabase.table("issues").insert({
+            "project_id": project_id,
+            "whatsapp_id": whatsapp_id,
+            "description": issue["description"],
+            "equipment": issue.get("equipment"),
+            "certainty": issue["certainty"],
+            "status": "open",
+            "source_message_id": message_id
+        }).execute()
+
+    pending = data.get("pending_item")
+
+    if pending:
+        supabase.table("pending_items").insert({
+            "project_id": project_id,
+            "whatsapp_id": whatsapp_id,
+            "description": pending["description"],
+            "responsible": pending.get("responsible"),
+            "status": "open",
+            "source_message_id": message_id
+        }).execute()
 
 
 def send_whatsapp_message(to: str, text: str):
@@ -207,6 +370,28 @@ async def receive_webhook(request: Request):
             message_id
         )
 
+        project_id = get_active_project_id(sender)
+
+        if project_id:
+            operational_data = extract_operational_data(
+                received_text
+            )
+
+            print(
+                "===== DADOS OPERACIONAIS ====="
+            )
+            print(operational_data)
+            print(
+                "=============================="
+            )
+
+            save_operational_data(
+                project_id,
+                sender,
+                message_id,
+                operational_data
+            )
+
         ai_reply = ask_openai(sender)
 
         save_message(
@@ -226,4 +411,4 @@ async def receive_webhook(request: Request):
             repr(e)
         )
 
-    return {"status": "ok"}   
+    return {"status": "ok"}
