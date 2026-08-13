@@ -640,7 +640,7 @@ def build_daily_summary(project: dict):
         )
 
     return "\n\n".join(lines)
-    def get_today_utc_range():
+   def get_today_utc_range():
     now_br = datetime.now(BRAZIL_TZ)
 
     start_br = now_br.replace(
