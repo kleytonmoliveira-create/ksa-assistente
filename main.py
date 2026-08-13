@@ -1580,24 +1580,7 @@ def handle_command(
             project
         )
 
-    # DPR
-    if lower in [
-        "@ksa dpr hoje",
-        "@ksa dpr",
-        "@ksa gerar dpr"
-    ]:
-        project = get_active_project(
-            whatsapp_id
-        )
-
-        if not project:
-            return (
-                "Nenhum projeto está ativo."
-            )
-
-        return build_dpr(
-            project
-        )
+ 
         # DPR PDF
     if lower in [
         "@ksa dpr hoje",
