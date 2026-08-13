@@ -3,4 +3,4 @@ uvicorn[standard]
 requests
 openai
 supabase
-reportlab
+fpdf2
