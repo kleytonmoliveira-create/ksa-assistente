@@ -2,7 +2,13 @@ import os
 import json
 import requests
 import os
+import os
+import tempfile
+import unicodedata
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from fpdf import FPDF
 KSA_HEADER_PATH = os.path.join("static", "cabecalho_ksa.png")
 
 from fastapi import FastAPI, Request, Response
@@ -634,7 +640,760 @@ def build_daily_summary(project: dict):
         )
 
     return "\n\n".join(lines)
-    
+    def get_today_utc_range():
+    now_br = datetime.now(BRAZIL_TZ)
+
+    start_br = now_br.replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0
+    )
+
+    end_br = start_br.replace(
+        hour=23,
+        minute=59,
+        second=59,
+        microsecond=999999
+    )
+
+    start_utc = start_br.astimezone(
+        timezone.utc
+    ).isoformat()
+
+    end_utc = end_br.astimezone(
+        timezone.utc
+    ).isoformat()
+
+    return start_utc, end_utc
+
+
+def get_dpr_today_data(project_id: int):
+    start_utc, end_utc = get_today_utc_range()
+
+    activities = (
+        supabase
+        .table("activities")
+        .select("*")
+        .eq("project_id", project_id)
+        .gte("created_at", start_utc)
+        .lte("created_at", end_utc)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+    issues = (
+        supabase
+        .table("issues")
+        .select("*")
+        .eq("project_id", project_id)
+        .gte("created_at", start_utc)
+        .lte("created_at", end_utc)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+    pending_items = (
+        supabase
+        .table("pending_items")
+        .select("*")
+        .eq("project_id", project_id)
+        .gte("created_at", start_utc)
+        .lte("created_at", end_utc)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+    return {
+        "activities": activities,
+        "issues": issues,
+        "pending_items": pending_items
+    }
+
+
+def pdf_safe_text(text):
+    """
+    Evita caracteres incompatíveis com as fontes
+    padrão do FPDF.
+    """
+    if text is None:
+        return ""
+
+    text = str(text)
+
+    replacements = {
+        "–": "-",
+        "—": "-",
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "•": "-"
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return text
+
+
+def safe_filename(text):
+    if not text:
+        return "projeto"
+
+    normalized = unicodedata.normalize(
+        "NFKD",
+        text
+    )
+
+    normalized = normalized.encode(
+        "ascii",
+        "ignore"
+    ).decode("ascii")
+
+    allowed = []
+
+    for char in normalized:
+        if char.isalnum():
+            allowed.append(char)
+        elif char in (" ", "-", "_"):
+            allowed.append("_")
+
+    result = "".join(allowed)
+
+    while "__" in result:
+        result = result.replace("__", "_")
+
+    return result.strip("_")[:50]
+
+
+def add_ksa_header(pdf):
+    if os.path.exists(KSA_HEADER_PATH):
+        pdf.image(
+            KSA_HEADER_PATH,
+            x=10,
+            y=8,
+            w=190
+        )
+
+        # Ajuste este valor caso o seu
+        # cabeçalho seja mais alto.
+        pdf.set_y(42)
+
+    else:
+        pdf.set_font(
+            "Helvetica",
+            "B",
+            16
+        )
+
+        pdf.cell(
+            0,
+            10,
+            "KSA SERVICE",
+            new_x="LMARGIN",
+            new_y="NEXT",
+            align="C"
+        )
+
+        pdf.ln(5)
+
+
+def pdf_section_title(pdf, title):
+    pdf.ln(3)
+
+    pdf.set_font(
+        "Helvetica",
+        "B",
+        11
+    )
+
+    pdf.set_fill_color(
+        235,
+        235,
+        235
+    )
+
+    pdf.cell(
+        0,
+        8,
+        pdf_safe_text(title),
+        border=1,
+        fill=True,
+        new_x="LMARGIN",
+        new_y="NEXT"
+    )
+
+    pdf.ln(2)
+
+
+def pdf_item(pdf, number, text):
+    pdf.set_font(
+        "Helvetica",
+        "",
+        9
+    )
+
+    pdf.multi_cell(
+        0,
+        5,
+        pdf_safe_text(
+            f"{number}. {text}"
+        )
+    )
+
+    pdf.ln(1)
+
+
+def generate_dpr_pdf(project: dict):
+    data = get_dpr_today_data(
+        project["id"]
+    )
+
+    activities = data["activities"]
+    issues = data["issues"]
+    pending_items = data["pending_items"]
+
+    now_br = datetime.now(BRAZIL_TZ)
+
+    date_br = now_br.strftime(
+        "%d/%m/%Y"
+    )
+
+    filename = (
+        f"DPR_"
+        f"{safe_filename(project.get('name'))}_"
+        f"{now_br.strftime('%Y-%m-%d')}.pdf"
+    )
+
+    file_path = os.path.join(
+        tempfile.gettempdir(),
+        filename
+    )
+
+    pdf = FPDF(
+        orientation="P",
+        unit="mm",
+        format="A4"
+    )
+
+    pdf.set_auto_page_break(
+        auto=True,
+        margin=15
+    )
+
+    pdf.set_margins(
+        left=10,
+        top=10,
+        right=10
+    )
+
+    pdf.add_page()
+
+    add_ksa_header(pdf)
+
+    # TÍTULO
+    pdf.set_font(
+        "Helvetica",
+        "B",
+        14
+    )
+
+    pdf.cell(
+        0,
+        8,
+        "DPR - RELATORIO DIARIO DE PROGRESSO",
+        new_x="LMARGIN",
+        new_y="NEXT",
+        align="C"
+    )
+
+    pdf.ln(3)
+
+    # DADOS PRINCIPAIS
+    pdf.set_font(
+        "Helvetica",
+        "",
+        9
+    )
+
+    project_name = pdf_safe_text(
+        project.get("name")
+        or "Nao informado"
+    )
+
+    vessel = pdf_safe_text(
+        project.get("vessel")
+        or "Nao informada"
+    )
+
+    client_name = pdf_safe_text(
+        project.get("client")
+        or "Nao informado"
+    )
+
+    info = [
+        ["Data", date_br],
+        ["Projeto", project_name],
+        ["Embarcacao", vessel],
+        ["Cliente", client_name]
+    ]
+
+    for label, value in info:
+        pdf.set_font(
+            "Helvetica",
+            "B",
+            9
+        )
+
+        pdf.cell(
+            32,
+            7,
+            pdf_safe_text(label),
+            border=1
+        )
+
+        pdf.set_font(
+            "Helvetica",
+            "",
+            9
+        )
+
+        pdf.cell(
+            158,
+            7,
+            pdf_safe_text(value),
+            border=1,
+            new_x="LMARGIN",
+            new_y="NEXT"
+        )
+
+    # ATIVIDADES
+    pdf_section_title(
+        pdf,
+        "1. ATIVIDADES EXECUTADAS"
+    )
+
+    if activities:
+        for index, item in enumerate(
+            activities,
+            start=1
+        ):
+            description = item.get(
+                "description"
+            ) or "Sem descricao"
+
+            equipment = item.get(
+                "equipment"
+            )
+
+            status = item.get(
+                "status"
+            )
+
+            text = description
+
+            if equipment:
+                text += (
+                    f"\nEquipamento: "
+                    f"{equipment}"
+                )
+
+            if status:
+                text += (
+                    f"\nStatus: "
+                    f"{status}"
+                )
+
+            pdf_item(
+                pdf,
+                index,
+                text
+            )
+
+    else:
+        pdf_item(
+            pdf,
+            1,
+            "Nenhuma atividade registrada no dia."
+        )
+
+    # ANOMALIAS
+    pdf_section_title(
+        pdf,
+        "2. ANOMALIAS / CONSTATACOES"
+    )
+
+    if issues:
+        for index, item in enumerate(
+            issues,
+            start=1
+        ):
+            description = item.get(
+                "description"
+            ) or "Sem descricao"
+
+            equipment = item.get(
+                "equipment"
+            )
+
+            certainty = item.get(
+                "certainty"
+            )
+
+            status = item.get(
+                "status"
+            )
+
+            text = description
+
+            if equipment:
+                text += (
+                    f"\nEquipamento: "
+                    f"{equipment}"
+                )
+
+            if certainty:
+                text += (
+                    f"\nClassificacao: "
+                    f"{certainty}"
+                )
+
+            if status:
+                text += (
+                    f"\nStatus: "
+                    f"{status}"
+                )
+
+            pdf_item(
+                pdf,
+                index,
+                text
+            )
+
+    else:
+        pdf_item(
+            pdf,
+            1,
+            "Nenhuma anomalia registrada no dia."
+        )
+
+    # PENDÊNCIAS
+    pdf_section_title(
+        pdf,
+        "3. PENDENCIAS / PROXIMAS ACOES"
+    )
+
+    if pending_items:
+        for index, item in enumerate(
+            pending_items,
+            start=1
+        ):
+            description = item.get(
+                "description"
+            ) or "Sem descricao"
+
+            responsible = item.get(
+                "responsible"
+            )
+
+            status = item.get(
+                "status"
+            )
+
+            text = description
+
+            if responsible:
+                text += (
+                    f"\nResponsavel: "
+                    f"{responsible}"
+                )
+
+            if status:
+                text += (
+                    f"\nStatus: "
+                    f"{status}"
+                )
+
+            pdf_item(
+                pdf,
+                index,
+                text
+            )
+
+    else:
+        pdf_item(
+            pdf,
+            1,
+            "Nenhuma pendencia registrada."
+        )
+
+    # ASSINATURA
+    pdf.ln(12)
+
+    pdf.set_font(
+        "Helvetica",
+        "",
+        9
+    )
+
+    pdf.cell(
+        80,
+        5,
+        "_" * 40,
+        new_x="LMARGIN",
+        new_y="NEXT"
+    )
+
+    pdf.set_font(
+        "Helvetica",
+        "B",
+        9
+    )
+
+    pdf.multi_cell(
+        100,
+        5,
+        pdf_safe_text(
+            KSA_SIGNATURE
+        )
+    )
+
+    pdf.ln(3)
+
+    pdf.set_font(
+        "Helvetica",
+        "I",
+        7
+    )
+
+    pdf.multi_cell(
+        0,
+        4,
+        (
+            "Documento gerado automaticamente pelo "
+            "KSA Assistente com base nos registros "
+            "operacionais armazenados no sistema."
+        )
+    )
+
+    pdf.output(file_path)
+
+    return file_path, filename
+
+
+def upload_pdf_to_whatsapp(file_path):
+    url = (
+        f"https://graph.facebook.com/v25.0/"
+        f"{PHONE_NUMBER_ID}/media"
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {WHATSAPP_TOKEN}"
+    }
+
+    with open(file_path, "rb") as file:
+        files = {
+            "file": (
+                os.path.basename(file_path),
+                file,
+                "application/pdf"
+            )
+        }
+
+        data = {
+            "messaging_product":
+                "whatsapp"
+        }
+
+        response = requests.post(
+            url,
+            headers=headers,
+            files=files,
+            data=data,
+            timeout=60
+        )
+
+    print(
+        "===== UPLOAD PDF META ====="
+    )
+
+    print(response.status_code)
+    print(response.text)
+
+    print(
+        "==========================="
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    return result["id"]
+
+
+def send_whatsapp_document(
+    to,
+    media_id,
+    filename,
+    caption=None
+):
+    url = (
+        f"https://graph.facebook.com/v25.0/"
+        f"{PHONE_NUMBER_ID}/messages"
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {WHATSAPP_TOKEN}",
+
+        "Content-Type":
+            "application/json"
+    }
+
+    document = {
+        "id": media_id,
+        "filename": filename
+    }
+
+    if caption:
+        document["caption"] = caption
+
+    payload = {
+        "messaging_product":
+            "whatsapp",
+
+        "recipient_type":
+            "individual",
+
+        "to":
+            to,
+
+        "type":
+            "document",
+
+        "document":
+            document
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
+
+    print(
+        "===== ENVIO PDF META ====="
+    )
+
+    print(response.status_code)
+    print(response.text)
+
+    print(
+        "=========================="
+    )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+def generate_and_send_dpr(
+    whatsapp_id
+):
+    project = get_active_project(
+        whatsapp_id
+    )
+
+    if not project:
+        send_whatsapp_message(
+            whatsapp_id,
+            (
+                "Nenhum projeto esta ativo. "
+                "Use @KSA usar projeto NOME "
+                "antes de gerar o DPR."
+            )
+        )
+
+        return
+
+    pdf_path = None
+
+    try:
+        send_whatsapp_message(
+            whatsapp_id,
+            (
+                f"Gerando DPR de hoje para "
+                f"{project['name']}..."
+            )
+        )
+
+        pdf_path, filename = (
+            generate_dpr_pdf(
+                project
+            )
+        )
+
+        media_id = (
+            upload_pdf_to_whatsapp(
+                pdf_path
+            )
+        )
+
+        today = datetime.now(
+            BRAZIL_TZ
+        ).strftime("%d/%m/%Y")
+
+        caption = (
+            f"DPR {today} - "
+            f"{project['name']}"
+        )
+
+        send_whatsapp_document(
+            whatsapp_id,
+            media_id,
+            filename,
+            caption
+        )
+
+        send_whatsapp_message(
+            whatsapp_id,
+            "DPR enviado com sucesso."
+        )
+
+    except Exception as e:
+        print(
+            "ERRO DPR:",
+            repr(e)
+        )
+
+        send_whatsapp_message(
+            whatsapp_id,
+            (
+                "Nao consegui gerar ou enviar "
+                "o DPR. Verifique os logs "
+                "do servidor."
+            )
+        )
+
+    finally:
+        if (
+            pdf_path
+            and os.path.exists(pdf_path)
+        ):
+            try:
+                os.remove(pdf_path)
+
+            except Exception:
+                pass
 def handle_command(
     whatsapp_id: str,
     text: str
@@ -838,7 +1597,17 @@ def handle_command(
         return build_dpr(
             project
         )
-    
+        # DPR PDF
+    if lower in [
+        "@ksa dpr hoje",
+        "@ksa gerar dpr",
+        "@ksa dpr pdf"
+    ]:
+        generate_and_send_dpr(
+            whatsapp_id
+        )
+
+        return "__DPR_SENT__"
     return None
 @app.post("/webhook")
 async def receive_webhook(request: Request):
@@ -867,30 +1636,44 @@ async def receive_webhook(request: Request):
         # COMANDOS @KSA
         # ---------------------------------
         command_reply = handle_command(
+    sender,
+    received_text
+)
+
+if command_reply:
+    save_message(
+        sender,
+        "user",
+        received_text,
+        message_id
+    )
+
+    # DPR ja foi enviado pela própria função
+    if command_reply == "__DPR_SENT__":
+        save_message(
             sender,
-            received_text
+            "assistant",
+            "DPR PDF gerado e enviado."
         )
 
-        if command_reply:
-            save_message(
-                sender,
-                "user",
-                received_text,
-                message_id
-            )
+        return {
+            "status": "ok"
+        }
 
-            save_message(
-                sender,
-                "assistant",
-                command_reply
-            )
+    save_message(
+        sender,
+        "assistant",
+        command_reply
+    )
 
-            send_whatsapp_message(
-                sender,
-                command_reply
-            )
+    send_whatsapp_message(
+        sender,
+        command_reply
+    )
 
-            return {"status": "ok"}
+    return {
+        "status": "ok"
+    }
 
         # ---------------------------------
         # CONTATO
@@ -1105,3 +1888,10 @@ def add_ksa_header(pdf):
             align="C"
         )
         pdf.ln(5)
+KSA_HEADER_PATH = "static/cabecalho_ksa.png"
+
+BRAZIL_TZ = ZoneInfo("America/Sao_Paulo")
+
+KSA_SIGNATURE = (
+    "Kleyton Oliveira - Diretor Tecnico KSA Service"
+)
