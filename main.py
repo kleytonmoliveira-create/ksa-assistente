@@ -1084,18 +1084,24 @@ def build_dpr(project: dict):
 
 def add_ksa_header(pdf):
     if os.path.exists(KSA_HEADER_PATH):
-        # A4 = 210 mm de largura
-        # margem esquerda/direita = 10 mm
-      pdf.add_page()
-add_ksa_header(pdf)
-
-pdf.set_font("Arial", "B", 15)
-pdf.cell(0, 8, "DPR - Relatorio Diario", ln=True, align="C")
-pdf.ln(4)
+        pdf.image(
+            KSA_HEADER_PATH,
+            x=10,
+            y=8,
+            w=190
+        )
+        pdf.set_y(38)
+    else:
+        pdf.set_font(
+            "Arial",
+            "B",
+            14
+        )
+        pdf.cell(
+            0,
+            10,
+            "KSA Service",
+            ln=True,
+            align="C"
+        )
         pdf.ln(5)
-
-pdf = FPDF()
-pdf.set_auto_page_break(auto=True, margin=15)
-pdf.add_page()
-
-add_ksa_header(pdf)
