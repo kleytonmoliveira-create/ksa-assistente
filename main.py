@@ -1675,7 +1675,6 @@ async def receive_webhook(request: Request):
         # CONTATO
         # -----------------------------
         contact_name = None
-
         contacts = value.get("contacts", [])
 
         if contacts:
@@ -1774,7 +1773,6 @@ async def receive_webhook(request: Request):
         # CONTATO
         # ---------------------------------
         contact_name = None
-
         contacts = value.get("contacts", [])
 
         if contacts:
