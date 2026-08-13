@@ -4,3 +4,4 @@ requests
 openai
 supabase
 fpdf2
+reportlab
