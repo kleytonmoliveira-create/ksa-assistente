@@ -1,6 +1,9 @@
 import os
 import json
 import requests
+import os
+
+KSA_HEADER_PATH = os.path.join("static", "cabecalho_ksa.png")
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -1078,3 +1081,21 @@ def build_dpr(project: dict):
     ])
 
     return "\n".join(lines)
+
+def add_ksa_header(pdf):
+    if os.path.exists(KSA_HEADER_PATH):
+        # A4 = 210 mm de largura
+        # margem esquerda/direita = 10 mm
+      pdf.add_page()
+add_ksa_header(pdf)
+
+pdf.set_font("Arial", "B", 15)
+pdf.cell(0, 8, "DPR - Relatorio Diario", ln=True, align="C")
+pdf.ln(4)
+        pdf.ln(5)
+
+pdf = FPDF()
+pdf.set_auto_page_break(auto=True, margin=15)
+pdf.add_page()
+
+add_ksa_header(pdf)
