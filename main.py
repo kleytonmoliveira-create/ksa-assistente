@@ -450,7 +450,188 @@ def get_open_pending_items(project_id: int):
 
     return response.data or []
 
+from datetime import datetime, timezone, timedelta
 
+BRAZIL_TZ = timezone(timedelta(hours=-3))
+
+
+def today_start_iso():
+    now = datetime.now(BRAZIL_TZ)
+
+    start = now.replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0
+    )
+
+    return start.isoformat()
+
+
+def get_today_activities(project_id: int):
+    return (
+        supabase
+        .table("activities")
+        .select("*")
+        .eq("project_id", project_id)
+        .gte("created_at", today_start_iso())
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+
+def get_today_issues(project_id: int):
+    return (
+        supabase
+        .table("issues")
+        .select("*")
+        .eq("project_id", project_id)
+        .gte("created_at", today_start_iso())
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+
+def get_today_pending(project_id: int):
+    return (
+        supabase
+        .table("pending_items")
+        .select("*")
+        .eq("project_id", project_id)
+        .gte("created_at", today_start_iso())
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+
+def build_daily_summary(project: dict):
+    project_id = project["id"]
+
+    activities = get_today_activities(project_id)
+    issues = get_today_issues(project_id)
+    pending = get_today_pending(project_id)
+
+    lines = [
+        f"RESUMO DO DIA — {project['name']}"
+    ]
+
+    if project.get("vessel"):
+        lines.append(
+            f"Embarcação: {project['vessel']}"
+        )
+
+    if project.get("client"):
+        lines.append(
+            f"Cliente: {project['client']}"
+        )
+
+    lines.append("")
+
+    # ATIVIDADES
+    lines.append("ATIVIDADES")
+
+    if activities:
+        for index, item in enumerate(
+            activities,
+            start=1
+        ):
+            line = (
+                f"{index}. {item['description']}"
+            )
+
+            if item.get("equipment"):
+                line += (
+                    f"\nEquipamento: "
+                    f"{item['equipment']}"
+                )
+
+            if item.get("status"):
+                line += (
+                    f"\nStatus: "
+                    f"{item['status']}"
+                )
+
+            lines.append(line)
+
+    else:
+        lines.append(
+            "Nenhuma atividade registrada hoje."
+        )
+
+    lines.append("")
+
+    # ANOMALIAS
+    lines.append("ANOMALIAS / OCORRÊNCIAS")
+
+    if issues:
+        for index, item in enumerate(
+            issues,
+            start=1
+        ):
+            line = (
+                f"{index}. {item['description']}"
+            )
+
+            if item.get("equipment"):
+                line += (
+                    f"\nEquipamento: "
+                    f"{item['equipment']}"
+                )
+
+            if item.get("certainty"):
+                line += (
+                    f"\nClassificação: "
+                    f"{item['certainty']}"
+                )
+
+            lines.append(line)
+
+    else:
+        lines.append(
+            "Nenhuma anomalia registrada hoje."
+        )
+
+    lines.append("")
+
+    # PENDÊNCIAS
+    lines.append("PENDÊNCIAS")
+
+    if pending:
+        for index, item in enumerate(
+            pending,
+            start=1
+        ):
+            line = (
+                f"{index}. {item['description']}"
+            )
+
+            if item.get("responsible"):
+                line += (
+                    f"\nResponsável: "
+                    f"{item['responsible']}"
+                )
+
+            if item.get("status"):
+                line += (
+                    f"\nStatus: "
+                    f"{item['status']}"
+                )
+
+            lines.append(line)
+
+    else:
+        lines.append(
+            "Nenhuma pendência registrada hoje."
+        )
+
+    return "\n\n".join(lines)
+    
 def handle_command(
     whatsapp_id: str,
     text: str
@@ -617,6 +798,44 @@ def handle_command(
 
         return "\n\n".join(lines)
 
+    # RESUMO DO DIA
+    if lower in [
+        "@ksa resumo hoje",
+        "@ksa resumo do dia",
+        "@ksa resumo"
+    ]:
+        project = get_active_project(
+            whatsapp_id
+        )
+
+        if not project:
+            return (
+                "Nenhum projeto está ativo."
+            )
+
+        return build_daily_summary(
+            project
+        )
+
+    # DPR
+    if lower in [
+        "@ksa dpr hoje",
+        "@ksa dpr",
+        "@ksa gerar dpr"
+    ]:
+        project = get_active_project(
+            whatsapp_id
+        )
+
+        if not project:
+            return (
+                "Nenhum projeto está ativo."
+            )
+
+        return build_dpr(
+            project
+        )
+    
     return None
 @app.post("/webhook")
 async def receive_webhook(request: Request):
@@ -751,3 +970,111 @@ async def receive_webhook(request: Request):
         )
 
     return {"status": "ok"}
+
+def build_dpr(project: dict):
+    project_id = project["id"]
+
+    activities = get_today_activities(project_id)
+    issues = get_today_issues(project_id)
+    pending = get_today_pending(project_id)
+
+    today = datetime.now(BRAZIL_TZ).strftime(
+        "%d/%m/%Y"
+    )
+
+    lines = [
+        "DPR — DAILY PROGRESS REPORT",
+        "",
+        f"Data: {today}",
+        f"Projeto: {project['name']}",
+    ]
+
+    if project.get("vessel"):
+        lines.append(
+            f"Embarcação: {project['vessel']}"
+        )
+
+    if project.get("client"):
+        lines.append(
+            f"Cliente: {project['client']}"
+        )
+
+    lines.extend([
+        "",
+        "1. ATIVIDADES EXECUTADAS"
+    ])
+
+    if activities:
+        for index, item in enumerate(
+            activities,
+            start=1
+        ):
+            lines.append(
+                f"{index}. {item['description']}"
+            )
+    else:
+        lines.append(
+            "Nenhuma atividade registrada."
+        )
+
+    lines.extend([
+        "",
+        "2. ANOMALIAS / CONSTATAÇÕES"
+    ])
+
+    if issues:
+        for index, item in enumerate(
+            issues,
+            start=1
+        ):
+            text = (
+                f"{index}. "
+                f"{item['description']}"
+            )
+
+            if item.get("certainty"):
+                text += (
+                    f" "
+                    f"[{item['certainty']}]"
+                )
+
+            lines.append(text)
+    else:
+        lines.append(
+            "Nenhuma anomalia registrada."
+        )
+
+    lines.extend([
+        "",
+        "3. PENDÊNCIAS / PRÓXIMAS AÇÕES"
+    ])
+
+    if pending:
+        for index, item in enumerate(
+            pending,
+            start=1
+        ):
+            text = (
+                f"{index}. "
+                f"{item['description']}"
+            )
+
+            if item.get("responsible"):
+                text += (
+                    f" — Responsável: "
+                    f"{item['responsible']}"
+                )
+
+            lines.append(text)
+    else:
+        lines.append(
+            "Nenhuma pendência registrada."
+        )
+
+    lines.extend([
+        "",
+        "Documento gerado automaticamente "
+        "pelo KSA Assistente."
+    ])
+
+    return "\n".join(lines)
